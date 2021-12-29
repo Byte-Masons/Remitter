@@ -28,6 +28,7 @@ contract Remitter {
     uint startingCycle;
     uint cyclesPaid;
     address wallet;
+    bool adminCanRemit;
   }
 
   //Worker ID => Information
@@ -37,6 +38,14 @@ contract Remitter {
 
   mapping(address => bool) public isAdmin;
   mapping(address => bool) public isSuperAdmin;
+
+  event PaymentCreated(
+    address indexed currency,
+    uint workerId,
+    uint amount,
+    string indexed description,
+    uint timstamp
+  );
 
   constructor(address _superAdmin, address _currency, uint _maxSalary, uint firstPayDay) {
     isAdmin[_superAdmin] = true;
@@ -48,22 +57,24 @@ contract Remitter {
 
   function getPaid(uint workerId) external returns (bool) {
     require(msg.sender == workerInfo[workerId].wallet, "not correct wallet");
-    paySalary(workerId);
+    _pay(workerId);
     return true;
   }
 
   function payOut(uint workerId) external returns (bool) {
     require(isAdmin[msg.sender], "you are not authorized to remit");
-    paySalary(workerId);
+    require(workerInfo[workerId].adminCanRemit, "push payments not authorized");
+    _pay(workerId);
     return true;
   }
 
-  function hire(uint workerId, uint salary, uint _startingCycle, address wallet) external returns (bool) {
+  function hire(uint workerId, uint salary, uint _startingCycle, address wallet, bool _adminCanRemit) external returns (bool) {
     require(workerInfo[workerId].startingCycle == 0, "employee already exists");
     require(isAdmin[msg.sender], "caller is not admin");
     updateSalary(workerId, salary);
     updateWallet(workerId, wallet);
     workerInfo[workerId].startingCycle = _startingCycle;
+    workerInfo[workerId].adminCanRemit = _adminCanRemit;
     return true;
   }
 
@@ -71,6 +82,7 @@ contract Remitter {
     require(isSuperAdmin[msg.sender], "caller is not admin");
     isAdmin[workerInfo[workerId].wallet] = false;
     isSuperAdmin[workerInfo[workerId].wallet] = false;
+    _pay(workerId);
     updateSalary(workerId, 0);
     updateWallet(workerId, address(0));
     return true;
@@ -78,7 +90,6 @@ contract Remitter {
 
   function updateCycle(uint newCycle) external returns (bool) {
     require(isSuperAdmin[msg.sender], "caller is not superAdmin");
-    require(currency.balanceOf(address(this)) == 0, "payments have not all been disbursed");
     cycle = newCycle;
     return true;
   }
@@ -91,6 +102,7 @@ contract Remitter {
 
   function updateCurrency(address newCurrency) external returns (bool) {
     require(isSuperAdmin[msg.sender], "caller is not superAdmin");
+    require(newCurrency != address(currency), "please enter a different currency");
     currency = IERC20(newCurrency);
     return true;
   }
@@ -119,21 +131,26 @@ contract Remitter {
     return true;
   }
 
-  function paySalary(uint workerId) internal returns (bool) {
-    tryAdvanceCycle();
+  function _pay(uint workerId) internal returns (bool) {
+    _tryAdvanceCycle();
 
     Worker storage worker = workerInfo[workerId];
-    uint owed = worker.salary * (cycleCount - workerInfo[workerId].startingCycle - workerInfo[workerId].cyclesPaid);
+    uint owed = worker.salary * (cycleCount - worker.startingCycle - worker.cyclesPaid);
 
     require(owed > 0, "you are not owed any payment");
     require(worker.wallet != address(0), "please update wallet");
 
-    createPayment(workerId, owed, "salary");
+    _createPayment(workerId, owed, "salary");
+    workerInfo[workerId].cyclesPaid = worker.startingCycle + cycleCount;
     currency.transfer(worker.wallet, owed);
+
+    if(worker.salary > maxSalary) {
+      worker.salary = maxSalary;
+    }
     return true;
   }
 
-  function createPayment(uint workerId, uint amount, string memory description) internal returns (bool) {
+  function _createPayment(uint workerId, uint amount, string memory description) internal returns (bool) {
     require(isAdmin[msg.sender], "caller is not admin");
     payments[workerId].push(
       Payment(
@@ -142,13 +159,14 @@ contract Remitter {
         amount,
         block.timestamp
       ));
+    emit PaymentCreated(address(currency), workerId, amount, description, block.timestamp);
     return true;
   }
 
-  function tryAdvanceCycle() internal {
-    uint timeAccounted = cycle * cycleCount;
+  function _tryAdvanceCycle() internal {
+    uint timeAccounted = cycle * cycleCount + startTime;
     uint timeUnaccounted = block.timestamp - timeAccounted;
-    if (timeUnaccounted <= cycle) {
+    if (timeUnaccounted >= cycle) {
       uint passed = timeUnaccounted / cycle;
       cycleCount += passed;
     }
