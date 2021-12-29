@@ -3,8 +3,13 @@
 pragma solidity ^0.8.0;
 
 import "./OZ/token/ERC20/IERC20.sol";
+import "./OZ/security/ReentrancyGuard.sol";
+import "./OZ/token/ERC20/utils/SafeERC20.sol";
 
-contract Remitter {
+// Written by Justin Bebis, secured by Goober
+
+contract Remitter is ReentrancyGuard {
+  using SafeERC20 for IERC20;
 
   address superAdmin;
 
@@ -131,7 +136,7 @@ contract Remitter {
     return true;
   }
 
-  function _pay(uint workerId) internal returns (bool) {
+  function _pay(uint workerId) internal nonReentrant returns (bool) {
     _tryAdvanceCycle();
 
     Worker storage worker = workerInfo[workerId];
@@ -142,7 +147,7 @@ contract Remitter {
 
     _createPayment(workerId, owed, "salary");
     workerInfo[workerId].cyclesPaid = worker.startingCycle + cycleCount;
-    currency.transfer(worker.wallet, owed);
+    currency.safeTransfer(worker.wallet, owed);
 
     if(worker.salary > maxSalary) {
       worker.salary = maxSalary;
