@@ -18,7 +18,7 @@ contract Remitter {
 
   struct Payment {
     address to;
-    string link;
+    string description;
     uint amount;
     uint time;
   }
