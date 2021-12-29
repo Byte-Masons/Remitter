@@ -42,7 +42,6 @@ contract Remitter is ReentrancyGuard {
   mapping (address => uint) public employeeId;
 
   mapping(address => bool) public isAdmin;
-  mapping(address => bool) public isSuperAdmin;
 
   event PaymentCreated(
     address indexed currency,
@@ -54,7 +53,7 @@ contract Remitter is ReentrancyGuard {
 
   constructor(address _superAdmin, address _currency, uint _maxSalary, uint firstPayDay) {
     isAdmin[_superAdmin] = true;
-    isSuperAdmin[_superAdmin] = true;
+    superAdmin = _superAdmin;
     currency = IERC20(_currency);
     maxSalary = _maxSalary;
     startTime = firstPayDay - cycle;
@@ -84,9 +83,8 @@ contract Remitter is ReentrancyGuard {
   }
 
   function terminate(uint workerId) external returns (bool) {
-    require(isSuperAdmin[msg.sender], "caller is not admin");
+    require(msg.sender == superAdmin, "caller is not super admin");
     isAdmin[workerInfo[workerId].wallet] = false;
-    isSuperAdmin[workerInfo[workerId].wallet] = false;
     _pay(workerId);
     updateSalary(workerId, 0);
     updateWallet(workerId, address(0));
@@ -94,21 +92,33 @@ contract Remitter is ReentrancyGuard {
   }
 
   function updateCycle(uint newCycle) external returns (bool) {
-    require(isSuperAdmin[msg.sender], "caller is not superAdmin");
+    require(msg.sender == superAdmin, "caller is not super admin");
     cycle = newCycle;
     return true;
   }
 
   function updateMaxSalary(uint newMax) external returns (bool) {
-    require(isSuperAdmin[msg.sender], "caller is not superAdmin");
+    require(msg.sender == superAdmin, "caller is not super admin");
     maxSalary = newMax;
     return true;
   }
 
   function updateCurrency(address newCurrency) external returns (bool) {
-    require(isSuperAdmin[msg.sender], "caller is not superAdmin");
+    require(msg.sender == superAdmin, "caller is not super admin");
     require(newCurrency != address(currency), "please enter a different currency");
     currency = IERC20(newCurrency);
+    return true;
+  }
+
+  function toggleAdmin(address wallet, bool status) external returns (bool) {
+    require(msg.sender == superAdmin, "caller is not super admin");
+    isAdmin[wallet] = status;
+    return true;
+  }
+
+  function changeSuperAdmin(address newSuper) external returns (bool) {
+    require(msg.sender == superAdmin, "not super admin");
+    superAdmin = newSuper;
     return true;
   }
 
@@ -123,16 +133,10 @@ contract Remitter is ReentrancyGuard {
 
   function updateWallet(uint workerId, address newWallet) public returns (bool) {
     require(msg.sender == workerInfo[workerId].wallet ||
-      isSuperAdmin[msg.sender], "caller is not employee or super admin");
+      msg.sender == superAdmin, "caller is not super admin");
 
     workerInfo[workerId].wallet = newWallet;
     employeeId[newWallet] = workerId;
-    return true;
-  }
-
-  function toggleAdmin(address wallet, bool status) public returns (bool) {
-    require(isSuperAdmin[msg.sender], "caller is not super admin");
-    isAdmin[wallet] = status;
     return true;
   }
 
