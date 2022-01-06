@@ -11,15 +11,17 @@ import "./OZ/token/ERC20/utils/SafeERC20.sol";
 contract Remitter is ReentrancyGuard {
   using SafeERC20 for IERC20;
 
-  address superAdmin;
+  address public superAdmin;
 
-  uint cycle = 15 days;
-  uint cycleCount;
-  uint startTime;
+  uint public cycle = 15 days;
+  uint public cycleCount;
+  uint public startTime;
 
-  uint totalPayroll;
-  uint maxSalary;
-  IERC20 currency;
+  uint public totalReimbursements;
+  uint public totalPayroll;
+  uint public totalWorkers;
+  uint public maxSalary;
+  IERC20 public currency;
 
   struct Payment {
     address to;
@@ -30,6 +32,7 @@ contract Remitter is ReentrancyGuard {
 
   struct Worker {
     uint salary;
+    uint reimbursements;
     uint startingCycle;
     uint cyclesPaid;
     address wallet;
@@ -59,26 +62,33 @@ contract Remitter is ReentrancyGuard {
     startTime = firstPayDay - cycle;
   }
 
-  function getPaid(uint workerId) external returns (bool) {
-    require(msg.sender == workerInfo[workerId].wallet, "not correct wallet");
-    _pay(workerId);
+  function getPaid() external returns (bool) {
+    require(msg.sender == workerInfo[employeeId[msg.sender]].wallet, "not correct wallet");
+    _pay(employeeId[msg.sender]);
     return true;
   }
 
   function payOut(uint workerId) external returns (bool) {
-    require(isAdmin[msg.sender], "you are not authorized to remit");
-    require(workerInfo[workerId].adminCanRemit, "push payments not authorized");
+    require(isAdmin[msg.sender] || msg.sender == superAdmin, "payOut: not authorized");
+    require(workerInfo[workerId].adminCanRemit, "payOut: no permission");
     _pay(workerId);
     return true;
   }
 
-  function hire(uint workerId, uint salary, uint _startingCycle, address wallet, bool _adminCanRemit) external returns (bool) {
+  function hire(
+    uint workerId,
+    uint salary,
+    uint _startingCycle,
+    address wallet,
+    bool _adminCanRemit
+  ) external returns (bool) {
     require(workerInfo[workerId].startingCycle == 0, "employee already exists");
     require(isAdmin[msg.sender], "caller is not admin");
     updateSalary(workerId, salary);
     updateWallet(workerId, wallet);
     workerInfo[workerId].startingCycle = _startingCycle;
     workerInfo[workerId].adminCanRemit = _adminCanRemit;
+    totalWorkers++;
     return true;
   }
 
@@ -88,12 +98,14 @@ contract Remitter is ReentrancyGuard {
     _pay(workerId);
     updateSalary(workerId, 0);
     updateWallet(workerId, address(0));
+    totalWorkers--;
     return true;
   }
 
-  function updateCycle(uint newCycle) external returns (bool) {
-    require(msg.sender == superAdmin, "caller is not super admin");
-    cycle = newCycle;
+  function addReimbursement(uint amount, uint workerId) external returns (bool) {
+    require(isAdmin[msg.sender], "caller is not admin");
+    workerInfo[workerId].reimbursements += amount;
+    totalReimbursements += amount;
     return true;
   }
 
@@ -122,9 +134,19 @@ contract Remitter is ReentrancyGuard {
     return true;
   }
 
+  function toggleAdminRemittancePermission(bool canRemit) external returns (bool) {
+    require(msg.sender == workerInfo[employeeId[msg.sender]].wallet
+      || msg.sender == superAdmin, "not correct wallet or superAdmin");
+    workerInfo[employeeId[msg.sender]].adminCanRemit = canRemit;
+    return true;
+  }
+
   function updateSalary(uint workerId, uint newSalary) public returns (bool) {
     require(isAdmin[msg.sender], "caller is not admin");
     require(newSalary <= maxSalary, "salary input too high");
+    if (_isOwed(workerId)) {
+      _pay(workerId);
+    }
     totalPayroll -= workerInfo[workerId].salary;
     workerInfo[workerId].salary = newSalary;
     totalPayroll += newSalary;
@@ -133,24 +155,37 @@ contract Remitter is ReentrancyGuard {
 
   function updateWallet(uint workerId, address newWallet) public returns (bool) {
     require(msg.sender == workerInfo[workerId].wallet ||
-      msg.sender == superAdmin, "caller is not super admin");
+      msg.sender == superAdmin, "updateWallet: not authorized");
 
     workerInfo[workerId].wallet = newWallet;
     employeeId[newWallet] = workerId;
     return true;
   }
 
+  function _isOwed(uint workerId) internal view returns (bool) {
+    Worker memory worker = workerInfo[workerId];
+    uint owed = (worker.salary * (cycleCount - worker.startingCycle - worker.cyclesPaid)) + worker.reimbursements;
+    if (owed > 0) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   function _pay(uint workerId) internal nonReentrant returns (bool) {
     _tryAdvanceCycle();
 
     Worker storage worker = workerInfo[workerId];
-    uint owed = worker.salary * (cycleCount - worker.startingCycle - worker.cyclesPaid);
+    uint owed = (worker.salary * (cycleCount - worker.startingCycle - worker.cyclesPaid)) + worker.reimbursements;
 
     require(owed > 0, "you are not owed any payment");
     require(worker.wallet != address(0), "please update wallet");
 
     _createPayment(workerId, owed, "salary");
-    workerInfo[workerId].cyclesPaid = worker.startingCycle + cycleCount;
+    worker.cyclesPaid = worker.startingCycle + cycleCount;
+    totalReimbursements -= worker.reimbursements;
+    worker.reimbursements = 0;
+
     currency.safeTransfer(worker.wallet, owed);
 
     if(worker.salary > maxSalary) {
@@ -160,7 +195,6 @@ contract Remitter is ReentrancyGuard {
   }
 
   function _createPayment(uint workerId, uint amount, string memory description) internal returns (bool) {
-    require(isAdmin[msg.sender], "caller is not admin");
     payments[workerId].push(
       Payment(
         workerInfo[workerId].wallet,
@@ -179,5 +213,10 @@ contract Remitter is ReentrancyGuard {
       uint passed = timeUnaccounted / cycle;
       cycleCount += passed;
     }
+  }
+
+  function withdraw(address targetToken) external {
+    require(msg.sender == superAdmin, "not authorized");
+    IERC20(targetToken).transfer(superAdmin, IERC20(targetToken).balanceOf(address(this)));
   }
 }
