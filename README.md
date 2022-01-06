@@ -9,7 +9,7 @@ Default cycle is 15 days but it can be whatever.
 Total Payroll helps the DAO know how much to fund the contract.
 
 All payments are logged in the payments mapping to serve up to employees.
-employeeId is logged with the default wallet for convenience' sake so we can reference the connected wallet from the front end.
+workerId is logged with the default wallet for convenience' sake so we can reference the connected wallet from the front end.
 
 The reason for making this contract is reducing the amount of multisig/governance transactions we need to pay people. We just need to fund the payment contract every pay cycle for totalPayroll.
 
